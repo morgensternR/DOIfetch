@@ -9,6 +9,10 @@ on:
         description: Run the isolated public PLOS download check
         type: boolean
         default: false
+      final_cloud:
+        description: Run the isolated DOI source-chain and memory verification
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -43,8 +47,8 @@ jobs:
           docker build --build-arg PYTHON_VERSION="$PYTHON_VERSION" --tag doifetch-security "$context"
       - name: Formatting and focused lint checks
         run: |
-          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges doifetch-security uv run --offline --frozen --with ruff --with pip-audit ruff format --check fetch_crossref.py fetch_ezproxy.py fetch_hal.py fetch_istex.py fetch_libgen.py fetch_scihub.py fetch_unpaywall.py fetch_url.py safe_http.py pdf_utils.py tests/test_fetch_ezproxy.py tests/test_fetch_scihub.py tests/test_fetch_istex.py tests/conftest.py tests/test_security.py tests/cloud_open_access.py tests/test_network.py
-          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges doifetch-security uv run --offline --frozen --with ruff --with pip-audit ruff check --select E4,E7,E9,F fetch_crossref.py fetch_ezproxy.py fetch_hal.py fetch_istex.py fetch_libgen.py fetch_scihub.py fetch_unpaywall.py fetch_url.py safe_http.py pdf_utils.py tests/test_fetch_ezproxy.py tests/test_fetch_scihub.py tests/test_fetch_istex.py tests/conftest.py tests/test_security.py tests/cloud_open_access.py tests/test_network.py
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges doifetch-security uv run --offline --frozen --with ruff --with pip-audit ruff format --check fetch_crossref.py fetch_ezproxy.py fetch_hal.py fetch_istex.py fetch_libgen.py fetch_scihub.py fetch_unpaywall.py fetch_url.py safe_http.py pdf_utils.py tests/test_fetch_ezproxy.py tests/test_fetch_scihub.py tests/test_fetch_istex.py tests/conftest.py tests/test_security.py tests/cloud_open_access.py tests/cloud_final_verification.py tests/cloud_memory.py tests/test_network.py
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges doifetch-security uv run --offline --frozen --with ruff --with pip-audit ruff check --select E4,E7,E9,F fetch_crossref.py fetch_ezproxy.py fetch_hal.py fetch_istex.py fetch_libgen.py fetch_scihub.py fetch_unpaywall.py fetch_url.py safe_http.py pdf_utils.py tests/test_fetch_ezproxy.py tests/test_fetch_scihub.py tests/test_fetch_istex.py tests/conftest.py tests/test_security.py tests/cloud_open_access.py tests/cloud_final_verification.py tests/cloud_memory.py tests/test_network.py
       - name: Offline tests (network disabled)
         run: >
           docker run --rm --network none --cap-drop ALL
@@ -171,3 +175,45 @@ jobs:
         with:
           name: open-access-report
           path: open-access-report.json
+  final-cloud:
+    needs: [offline, windows-offline, codeql]
+    if: >-
+      contains(github.event.head_commit.message, '[final-cloud-check]') ||
+      (github.event_name == 'workflow_dispatch' && inputs.final_cloud)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Build isolated verification image from tracked files only
+        shell: bash
+        run: |
+          context=$(mktemp -d)
+          git archive HEAD | tar -x -C "$context"
+          cat > "$context/Dockerfile" <<'DOCKERFILE'
+          FROM python:3.12-slim
+          RUN python -m pip install --no-cache-dir uv==0.13.5
+          WORKDIR /work
+          COPY . .
+          ENV HOME=/tmp/empty-home PYTHONPATH=/work UV_CACHE_DIR=/opt/uv-cache
+          RUN mkdir -p /tmp/empty-home
+          RUN uv run --locked python -c "pass"
+          DOCKERFILE
+          docker build --tag doifetch-final "$context"
+          docker image inspect doifetch-final --format '{{.Id}}'
+      - name: Offline memory measurements with 1 and 15 workers
+        shell: bash
+        run: |
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 --memory 4g doifetch-final uv run --offline --frozen python tests/cloud_memory.py | tee memory-report.json
+      - name: One credential-free DOI source-chain attempt
+        shell: bash
+        run: |
+          docker run --rm --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 --memory 2g doifetch-final uv run --offline --frozen python tests/cloud_final_verification.py | tee source-chain-report.json
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        if: always()
+        with:
+          name: final-cloud-reports
+          path: |
+            memory-report.json
+            source-chain-report.json
