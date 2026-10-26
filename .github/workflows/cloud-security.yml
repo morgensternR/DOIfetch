@@ -20,7 +20,7 @@ jobs:
         run: |
           context=$(mktemp -d)
           git archive HEAD | tar -x -C "$context"
-          curl --fail --silent --show-error --proto '=https' 'https://api.github.com/repos/morgensternR/DOIfetch/git/blobs/0f5ec9ec4bdd5000755b9c3cdc3a28641f47f78b' | jq -r .content | base64 --decode > "$context/candidate.json"
+          curl --fail --silent --show-error --proto '=https' 'https://api.github.com/repos/morgensternR/DOIfetch/git/blobs/031db92e46d0b707370e909e51812da012786970' | jq -r .content | base64 --decode > "$context/candidate.json"
           cat > "$context/Dockerfile" <<'DOCKERFILE'
           FROM python:3.12-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704
           RUN python -m pip install --no-cache-dir uv==0.13.5
@@ -30,8 +30,8 @@ jobs:
           RUN mkdir -p /tmp/empty-home
           RUN uv run --no-project python -c "import json,pathlib; data=json.load(open('candidate.json')); [(pathlib.Path(p).parent.mkdir(parents=True,exist_ok=True),pathlib.Path(p).write_text(c)) for p,c in data.items()]"
           RUN uv lock --upgrade-package requests --upgrade-package urllib3 --upgrade-package soupsieve --upgrade-package certifi --upgrade-package idna --upgrade-package pygments --upgrade-package pytest
-          RUN uv run --with ruff --with pip-audit ruff format fetch_crossref.py fetch_ezproxy.py fetch_hal.py fetch_istex.py fetch_libgen.py fetch_scihub.py fetch_unpaywall.py fetch_url.py safe_http.py pdf_utils.py tests/test_fetch_ezproxy.py tests/test_fetch_scihub.py tests/test_fetch_istex.py tests/conftest.py tests/test_security.py
-          RUN uv run --with ruff --with pip-audit ruff check --select E4,E7,E9,F fetch_crossref.py fetch_ezproxy.py fetch_hal.py fetch_istex.py fetch_libgen.py fetch_scihub.py fetch_unpaywall.py fetch_url.py safe_http.py pdf_utils.py tests/test_fetch_ezproxy.py tests/test_fetch_scihub.py tests/test_fetch_istex.py tests/conftest.py tests/test_security.py
+          RUN uv run --with ruff --with pip-audit ruff format fetch_crossref.py fetch_ezproxy.py fetch_hal.py fetch_istex.py fetch_libgen.py fetch_scihub.py fetch_unpaywall.py fetch_url.py safe_http.py pdf_utils.py tests/test_fetch_ezproxy.py tests/test_fetch_scihub.py tests/test_fetch_istex.py tests/conftest.py tests/test_security.py tests/cloud_open_access.py
+          RUN uv run --with ruff --with pip-audit ruff check --select E4,E7,E9,F fetch_crossref.py fetch_ezproxy.py fetch_hal.py fetch_istex.py fetch_libgen.py fetch_scihub.py fetch_unpaywall.py fetch_url.py safe_http.py pdf_utils.py tests/test_fetch_ezproxy.py tests/test_fetch_scihub.py tests/test_fetch_istex.py tests/conftest.py tests/test_security.py tests/cloud_open_access.py
           RUN uv run --with ruff --with pip-audit python -c "pass"
           DOCKERFILE
           docker build --tag doifetch-security "$context"
@@ -57,12 +57,12 @@ jobs:
         shell: bash
         run: |
           container=$(docker create doifetch-security)
-          for path in fetch_crossref.py fetch_ezproxy.py fetch_hal.py fetch_istex.py fetch_libgen.py fetch_scihub.py fetch_unpaywall.py fetch_url.py safe_http.py pdf_utils.py tests/test_fetch_ezproxy.py tests/test_fetch_scihub.py tests/test_fetch_istex.py pyproject.toml tests/conftest.py tests/test_security.py uv.lock; do
+          for path in fetch_crossref.py fetch_ezproxy.py fetch_hal.py fetch_istex.py fetch_libgen.py fetch_scihub.py fetch_unpaywall.py fetch_url.py safe_http.py pdf_utils.py tests/test_fetch_ezproxy.py tests/test_fetch_scihub.py tests/test_fetch_istex.py pyproject.toml tests/conftest.py tests/test_security.py tests/cloud_open_access.py uv.lock; do
             docker cp "$container:/work/$path" "$path"
           done
           docker rm "$container"
           git diff --check
-          git add -- fetch_crossref.py fetch_ezproxy.py fetch_hal.py fetch_istex.py fetch_libgen.py fetch_scihub.py fetch_unpaywall.py fetch_url.py safe_http.py pdf_utils.py tests/test_fetch_ezproxy.py tests/test_fetch_scihub.py tests/test_fetch_istex.py pyproject.toml tests/conftest.py tests/test_security.py uv.lock
+          git add -- fetch_crossref.py fetch_ezproxy.py fetch_hal.py fetch_istex.py fetch_libgen.py fetch_scihub.py fetch_unpaywall.py fetch_url.py safe_http.py pdf_utils.py tests/test_fetch_ezproxy.py tests/test_fetch_scihub.py tests/test_fetch_istex.py pyproject.toml tests/conftest.py tests/test_security.py tests/cloud_open_access.py uv.lock
           git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m "security: constrain network destinations and safely publish bounded downloads"
           gh auth setup-git
           git push origin HEAD:security/cloud-hardening
