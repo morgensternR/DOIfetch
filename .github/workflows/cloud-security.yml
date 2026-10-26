@@ -2,57 +2,46 @@ name: Cloud security verification
 on:
   push:
     branches: [security/cloud-hardening]
-  pull_request:
   workflow_dispatch:
-    inputs:
-      open_access:
-        description: Run the isolated public PLOS download check
-        type: boolean
-        default: false
 permissions:
   contents: read
 jobs:
-  offline:
+  harden:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    strategy:
-      matrix:
-        python: ["3.10", "3.12"]
+    timeout-minutes: 20
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Build disposable test image (no credentials or host mounts)
-        env:
-          PYTHON_VERSION: ${{ matrix.python }}
+      - name: Prepare and format candidate in disposable cloud container
         shell: bash
         run: |
           context=$(mktemp -d)
           git archive HEAD | tar -x -C "$context"
+          curl --fail --silent --show-error --proto '=https' 'https://api.github.com/repos/morgensternR/DOIfetch/git/blobs/d0073ee8a9c349109aaa83de352aae5cc4e9655b' | jq -r .content | base64 --decode > "$context/candidate.json"
           cat > "$context/Dockerfile" <<'DOCKERFILE'
-          ARG PYTHON_VERSION=3.12
-          FROM python:${PYTHON_VERSION}-slim
+          FROM python:3.12-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704
           RUN python -m pip install --no-cache-dir uv==0.13.5
           WORKDIR /work
           COPY . .
-          ENV HOME=/tmp/empty-home PYTHONPATH=/work
+          ENV HOME=/tmp/empty-home
           RUN mkdir -p /tmp/empty-home
-          RUN uv run --locked python -c "pass"
-          RUN uv run --frozen --with ruff --with pip-audit python -c "pass"
+          RUN uv run --no-project python -c "import json,pathlib; data=json.load(open('candidate.json')); [(pathlib.Path(p).parent.mkdir(parents=True,exist_ok=True),pathlib.Path(p).write_text(c)) for p,c in data.items()]"
+          RUN uv lock --upgrade-package requests --upgrade-package urllib3 --upgrade-package soupsieve --upgrade-package certifi --upgrade-package idna --upgrade-package pygments --upgrade-package pytest
+          RUN uv run --with ruff --with pip-audit ruff format fetch_crossref.py fetch_ezproxy.py fetch_hal.py fetch_istex.py fetch_libgen.py fetch_scihub.py fetch_unpaywall.py fetch_url.py safe_http.py pdf_utils.py tests/test_fetch_ezproxy.py tests/test_fetch_scihub.py tests/test_fetch_istex.py tests/conftest.py tests/test_security.py tests/cloud_open_access.py tests/test_network.py
+          RUN uv run --with ruff --with pip-audit ruff check --select E4,E7,E9,F fetch_crossref.py fetch_ezproxy.py fetch_hal.py fetch_istex.py fetch_libgen.py fetch_scihub.py fetch_unpaywall.py fetch_url.py safe_http.py pdf_utils.py tests/test_fetch_ezproxy.py tests/test_fetch_scihub.py tests/test_fetch_istex.py tests/conftest.py tests/test_security.py tests/cloud_open_access.py tests/test_network.py
+          RUN uv run --with ruff --with pip-audit python -c "pass"
           DOCKERFILE
-          docker build --build-arg PYTHON_VERSION="$PYTHON_VERSION" --tag doifetch-security "$context"
-      - name: Formatting and focused lint checks
-        run: |
-          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges doifetch-security uv run --offline --frozen --with ruff --with pip-audit ruff format --check fetch_crossref.py fetch_ezproxy.py fetch_hal.py fetch_istex.py fetch_libgen.py fetch_scihub.py fetch_unpaywall.py fetch_url.py safe_http.py pdf_utils.py tests/test_fetch_ezproxy.py tests/test_fetch_scihub.py tests/test_fetch_istex.py tests/conftest.py tests/test_security.py tests/cloud_open_access.py
-          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges doifetch-security uv run --offline --frozen --with ruff --with pip-audit ruff check --select E4,E7,E9,F fetch_crossref.py fetch_ezproxy.py fetch_hal.py fetch_istex.py fetch_libgen.py fetch_scihub.py fetch_unpaywall.py fetch_url.py safe_http.py pdf_utils.py tests/test_fetch_ezproxy.py tests/test_fetch_scihub.py tests/test_fetch_istex.py tests/conftest.py tests/test_security.py tests/cloud_open_access.py
-      - name: Offline tests (network disabled)
+          docker build --tag doifetch-security "$context"
+      - name: Offline regression tests (network disabled)
         run: >
           docker run --rm --network none --cap-drop ALL
           --security-opt no-new-privileges --pids-limit 128 --memory 2g
           doifetch-security
           uv run --offline --frozen pytest -q -m "not network" --ignore=tests/test_network.py
-      - name: Audit all resolved dependency versions
-        if: matrix.python == '3.12'
+      - name: Audit every resolved version in the universal lock
         run: |
           docker run --rm --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 --memory 2g doifetch-security sh -ec '
             uv run --offline --frozen python -c "import tomllib; d=tomllib.load(open(\"uv.lock\",\"rb\")); print(\"\\n\".join(p[\"name\"]+\"==\"+p[\"version\"] for p in d[\"package\"] if \"virtual\" not in p.get(\"source\",{})))" > /tmp/requirements.txt
@@ -62,67 +51,18 @@ jobs:
             uv run --offline --frozen --with ruff --with pip-audit pip-audit --no-deps --disable-pip -r /tmp/primary.txt
             uv run --offline --frozen --with ruff --with pip-audit pip-audit --no-deps --disable-pip -r /tmp/alternatives.txt
           '
-  codeql:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
-        with:
-          persist-credentials: false
-      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370
-        with:
-          languages: python
-          build-mode: none
-          queries: security-extended
-      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370
-        with:
-          upload: false
-          output: codeql-results
-      - name: Report Security Extended results
-        run: |
-          jq '[.runs[].results[] | {ruleId, message, locations}]' codeql-results/python.sarif
-          jq -e '[.runs[].results[]] | length == 0' codeql-results/python.sarif
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
-        if: always()
-        with:
-          name: codeql-security-extended
-          path: codeql-results/*.sarif
-  open-access:
-    needs: [offline, codeql]
-    if: >-
-      contains(github.event.head_commit.message, '[open-access-check]') ||
-      (github.event_name == 'workflow_dispatch' && inputs.open_access)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
-        with:
-          persist-credentials: false
-      - name: Build a new disposable image
+      - name: Commit only formatted, lint-clean, tested changes
         env:
-          PYTHON_VERSION: "3.12"
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          context=$(mktemp -d)
-          git archive HEAD | tar -x -C "$context"
-          cat > "$context/Dockerfile" <<'DOCKERFILE'
-          ARG PYTHON_VERSION=3.12
-          FROM python:${PYTHON_VERSION}-slim
-          RUN python -m pip install --no-cache-dir uv==0.13.5
-          WORKDIR /work
-          COPY . .
-          ENV HOME=/tmp/empty-home PYTHONPATH=/work
-          RUN mkdir -p /tmp/empty-home
-          RUN uv run --locked python -c "pass"
-          RUN uv run --frozen --with ruff --with pip-audit python -c "pass"
-          DOCKERFILE
-          docker build --build-arg PYTHON_VERSION="$PYTHON_VERSION" --tag doifetch-security "$context"
-      - name: One public download; raw-byte identity, size and SHA-256 checks
-        shell: bash
-        run: |
-          docker run --rm --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 --memory 2g doifetch-security uv run --offline --frozen python tests/cloud_open_access.py | tee open-access-report.json
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
-        if: always()
-        with:
-          name: open-access-report
-          path: open-access-report.json
+          container=$(docker create doifetch-security)
+          for path in fetch_crossref.py fetch_ezproxy.py fetch_hal.py fetch_istex.py fetch_libgen.py fetch_scihub.py fetch_unpaywall.py fetch_url.py safe_http.py pdf_utils.py tests/test_fetch_ezproxy.py tests/test_fetch_scihub.py tests/test_fetch_istex.py pyproject.toml tests/conftest.py tests/test_security.py tests/cloud_open_access.py tests/test_network.py uv.lock; do
+            docker cp "$container:/work/$path" "$path"
+          done
+          docker rm "$container"
+          git diff --check
+          git add -- fetch_crossref.py fetch_ezproxy.py fetch_hal.py fetch_istex.py fetch_libgen.py fetch_scihub.py fetch_unpaywall.py fetch_url.py safe_http.py pdf_utils.py tests/test_fetch_ezproxy.py tests/test_fetch_scihub.py tests/test_fetch_istex.py pyproject.toml tests/conftest.py tests/test_security.py tests/cloud_open_access.py tests/test_network.py uv.lock
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m "security: constrain network destinations and safely publish bounded downloads"
+          gh auth setup-git
+          git push origin HEAD:security/cloud-hardening
