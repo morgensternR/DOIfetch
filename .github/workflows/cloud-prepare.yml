@@ -17,7 +17,7 @@ jobs:
         run: |
           context=$(mktemp -d)
           git archive HEAD | tar -x -C "$context"
-          curl --fail --silent --show-error https://api.github.com/repos/morgensternR/DOIfetch/git/blobs/d51b4c75dd6cfd51a07ef33888a15ce318180cc8 | jq -r .content | base64 --decode > "$context/candidates.json"
+          curl --fail --silent --show-error https://api.github.com/repos/morgensternR/DOIfetch/git/blobs/a8659a71a99abf9e4ce53b63e933760bfcbf9231 | jq -r .content | base64 --decode > "$context/candidates.json"
           cat > "$context/Dockerfile" <<'DOCKERFILE'
           FROM python:3.12-slim
           RUN python -m pip install --no-cache-dir uv==0.13.5
