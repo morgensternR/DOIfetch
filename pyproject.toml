@@ -3,19 +3,24 @@ name = "doifetch"
 version = "0.1.0"
 description = "Batch academic paper downloader for Sci-Hub, Crossref, and Unpaywall"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "beautifulsoup4",
     "openpyxl",
     "pandas",
-    "requests",
+    "requests>=2.33.0",
+    "urllib3>=2.8.0",
+    "soupsieve>=2.9.0,<3",
+    "certifi>=2026.10.19",
+    "idna>=3.15",
     "tqdm",
     "xlrd",
 ]
 
 [dependency-groups]
 dev = [
-    "pytest",
+    "pytest>=9.0.3",
+    "pygments>=2.20.0",
 ]
 
 [tool.pytest.ini_options]

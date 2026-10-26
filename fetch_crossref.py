@@ -4,13 +4,11 @@ import argparse
 import os
 import warnings
 
-import requests
-import urllib3
+import safe_http as requests
 
-from config import PAPERS_DIR
+from config import PAPERS_DIR, TIMEOUT
 
 warnings.filterwarnings("ignore", category=FutureWarning, module="pandas")
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 class DoiNotFoundError(Exception):
@@ -25,7 +23,7 @@ def get_pdf_url(doi):
     """
     try:
         api_url = f"https://api.crossref.org/works/{doi}"
-        response = requests.get(api_url, verify=False)
+        response = requests.get(api_url, verify=True, timeout=TIMEOUT)
 
         if response.status_code == 404:
             raise DoiNotFoundError(f"DOI not found in Crossref (404): {doi}")
@@ -58,7 +56,7 @@ def fetch_pdf(doi, title, output_dir=PAPERS_DIR):
 
     Returns dict with keys: status, doi, title, file_name, error (if failed).
     """
-    from pdf_utils import clean_filename, is_valid_pdf
+    from pdf_utils import clean_filename, is_valid_pdf, write_download
 
     safe_title = title if title else f"Unknown_{doi}"
     file_name = f"{clean_filename(safe_title)}.pdf"
@@ -72,8 +70,6 @@ def fetch_pdf(doi, title, output_dir=PAPERS_DIR):
                 "title": title,
                 "file_name": file_name,
             }
-        else:
-            os.remove(file_path)
 
     try:
         pdf_url = get_pdf_url(doi)
@@ -94,7 +90,7 @@ def fetch_pdf(doi, title, output_dir=PAPERS_DIR):
             "error": str(e),
         }
     try:
-        paper = requests.get(pdf_url, verify=False)
+        paper = requests.get(pdf_url, verify=True, timeout=TIMEOUT)
         if paper.status_code != 200:
             return {
                 "status": "failed",
@@ -103,8 +99,7 @@ def fetch_pdf(doi, title, output_dir=PAPERS_DIR):
                 "file_name": file_name,
                 "error": f"PDF download failed: {paper.status_code}",
             }
-        with open(file_path, "wb") as f:
-            f.write(paper.content)
+        write_download(file_path, paper.content)
         if not is_valid_pdf(file_path):
             os.remove(file_path)
             return {

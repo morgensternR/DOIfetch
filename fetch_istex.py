@@ -14,7 +14,7 @@ the fulltext endpoint returns the PDF under a Bearer-token Authorization header.
 import argparse
 import os
 
-import requests
+import safe_http as requests
 
 from config import PAPERS_DIR, TIMEOUT
 
@@ -61,7 +61,7 @@ def fetch_pdf(doi, title, output_dir=PAPERS_DIR):
 
     Returns dict with keys: status, doi, title, file_name, error (if failed).
     """
-    from pdf_utils import clean_filename, is_valid_pdf
+    from pdf_utils import clean_filename, is_valid_pdf, write_download
 
     safe_title = title if title else f"Unknown_{doi}"
     file_name = f"{clean_filename(safe_title)}.pdf"
@@ -75,8 +75,6 @@ def fetch_pdf(doi, title, output_dir=PAPERS_DIR):
                 "title": title,
                 "file_name": file_name,
             }
-        else:
-            os.remove(file_path)
 
     token = _get_token()
     if not token:
@@ -120,8 +118,7 @@ def fetch_pdf(doi, title, output_dir=PAPERS_DIR):
                 "file_name": file_name,
                 "error": f"ISTEX fulltext download failed: {response.status_code}",
             }
-        with open(file_path, "wb") as f:
-            f.write(response.content)
+        write_download(file_path, response.content)
         if not is_valid_pdf(file_path):
             os.remove(file_path)
             return {

@@ -38,3 +38,31 @@ def sample_data_dir(tmp_path):
     (data_dir / "refs.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     return data_dir
+
+
+@pytest.fixture(autouse=True)
+def isolate_personal_state(monkeypatch, tmp_path, request):
+    """Only synthetic test homes, cookies, tokens and Zotero databases are used."""
+    import fetch_istex
+    import zotero
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    for key in (
+        "EZPROXY_BASE",
+        "EZPROXY_COOKIES",
+        "ISTEX_ACCESSTOKEN",
+        "ZOTERO_DB_PATH",
+        "ZOTERO_DATA_DIR",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(zotero, "_HOME", tmp_path)
+    monkeypatch.setattr(fetch_istex, "TOKEN_FILE", str(tmp_path / "absent.env"))
+    if request.node.get_closest_marker("network") is None:
+        import socket
+
+        def no_network(*args, **kwargs):
+            raise AssertionError("Offline test attempted network access")
+
+        monkeypatch.setattr(socket, "getaddrinfo", no_network)
+        monkeypatch.setattr(socket.socket, "connect", no_network)

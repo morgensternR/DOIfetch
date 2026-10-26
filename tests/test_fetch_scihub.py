@@ -2,12 +2,13 @@
 
 import fetch_scihub
 
-VALID_PDF = b"%PDF-1.6\n" + b"0" * 2000
+VALID_PDF = b"%PDF-1.6\n" + b"0" * 2000 + b"\n%%EOF\n"
 
 
 class _FakeResp:
     def __init__(self, content=b""):
         self.content = content
+        self.status_code = 200
 
     def iter_content(self, chunk_size=1024):
         yield self.content

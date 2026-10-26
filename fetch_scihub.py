@@ -6,7 +6,7 @@ import random
 import time
 from urllib.parse import quote
 
-import requests
+import safe_http as requests
 from bs4 import BeautifulSoup
 
 from config import (
@@ -54,7 +54,7 @@ def fetch_pdf(doi, title, output_dir=PAPERS_DIR):
 
     Returns dict with keys: status, doi, title, file_name, doi_link, error (if failed).
     """
-    from pdf_utils import clean_filename, is_valid_pdf
+    from pdf_utils import clean_filename, is_valid_pdf, write_download
 
     doi_link = f"{DOI_URL_BASE}{doi}" if doi else "No DOI"
     safe_title = title if title else f"Unknown_{int(time.time())}"
@@ -70,8 +70,6 @@ def fetch_pdf(doi, title, output_dir=PAPERS_DIR):
                 "doi_link": doi_link,
                 "file_name": file_name,
             }
-        else:
-            os.remove(file_path)
 
     time.sleep(random.uniform(MIN_DELAY, MAX_DELAY))
     last_error = ""
@@ -88,10 +86,11 @@ def fetch_pdf(doi, title, output_dir=PAPERS_DIR):
             pdf_response = requests.get(
                 pdf_url, headers=HEADERS, stream=True, timeout=TIMEOUT
             )
-            with open(file_path, "wb") as file_handle:
-                for chunk in pdf_response.iter_content(chunk_size=1024):
-                    if chunk:
-                        file_handle.write(chunk)
+            if pdf_response.status_code != 200:
+                raise requests.RequestException(
+                    f"PDF download failed: {pdf_response.status_code}"
+                )
+            write_download(file_path, pdf_response.content)
             # PDF verification step
             if not is_valid_pdf(file_path):
                 os.remove(file_path)

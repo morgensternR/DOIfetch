@@ -4,7 +4,7 @@ import argparse
 import os
 import re
 
-import requests
+import safe_http as requests
 
 from config import HEADERS, PAPERS_DIR, TIMEOUT
 
@@ -63,7 +63,7 @@ def fetch_pdf(doi, title, output_dir=PAPERS_DIR):
 
     Returns dict with keys: status, doi, title, file_name, error (if failed).
     """
-    from pdf_utils import clean_filename, is_valid_pdf
+    from pdf_utils import clean_filename, is_valid_pdf, write_download
 
     safe_title = title if title else f"Unknown_{doi}"
     file_name = f"{clean_filename(safe_title)}.pdf"
@@ -77,8 +77,6 @@ def fetch_pdf(doi, title, output_dir=PAPERS_DIR):
                 "title": title,
                 "file_name": file_name,
             }
-        else:
-            os.remove(file_path)
 
     author, title_keywords = _parse_author_title(title)
     if not author or not title_keywords:
@@ -109,8 +107,7 @@ def fetch_pdf(doi, title, output_dir=PAPERS_DIR):
                 "file_name": file_name,
                 "error": f"HAL PDF download failed: {pdf_resp.status_code}",
             }
-        with open(file_path, "wb") as f:
-            f.write(pdf_resp.content)
+        write_download(file_path, pdf_resp.content)
         if not is_valid_pdf(file_path):
             os.remove(file_path)
             return {

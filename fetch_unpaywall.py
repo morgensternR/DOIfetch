@@ -4,12 +4,10 @@ import argparse
 import os
 import warnings
 
-import urllib3
 
 from config import PAPERS_DIR, UNPAYWALL_EMAIL
 
 warnings.filterwarnings("ignore", category=FutureWarning, module="pandas")
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 def fetch_pdf(doi, title, output_dir=PAPERS_DIR):
@@ -17,8 +15,8 @@ def fetch_pdf(doi, title, output_dir=PAPERS_DIR):
 
     Returns dict with keys: status, doi, title, file_name, error (if failed).
     """
-    import requests
-    from pdf_utils import clean_filename, is_valid_pdf
+    import safe_http as requests
+    from pdf_utils import clean_filename, is_valid_pdf, write_download
 
     safe_title = title if title else f"Unknown_{doi}"
     file_name = f"{clean_filename(safe_title)}.pdf"
@@ -32,8 +30,6 @@ def fetch_pdf(doi, title, output_dir=PAPERS_DIR):
                 "title": title,
                 "file_name": file_name,
             }
-        else:
-            os.remove(file_path)
 
     try:
         url = f"https://api.unpaywall.org/v2/{doi}?email={UNPAYWALL_EMAIL}"
@@ -66,8 +62,7 @@ def fetch_pdf(doi, title, output_dir=PAPERS_DIR):
                 "file_name": file_name,
                 "error": f"PDF download failed: {pdf_resp.status_code}",
             }
-        with open(file_path, "wb") as f:
-            f.write(pdf_resp.content)
+        write_download(file_path, pdf_resp.content)
         if not is_valid_pdf(file_path):
             os.remove(file_path)
             return {

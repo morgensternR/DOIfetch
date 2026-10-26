@@ -2,7 +2,7 @@
 
 import fetch_istex
 
-VALID_PDF = b"%PDF-1.6\n" + b"0" * 2000
+VALID_PDF = b"%PDF-1.6\n" + b"0" * 2000 + b"\n%%EOF\n"
 
 
 class _FakeResp:

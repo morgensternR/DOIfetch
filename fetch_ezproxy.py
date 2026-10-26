@@ -26,9 +26,9 @@ import argparse
 import http.cookiejar
 import os
 import re
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
-import requests
+import safe_http as requests
 
 from config import HEADERS, PAPERS_DIR, TIMEOUT
 
@@ -53,29 +53,35 @@ def ezproxy_host(host: str, base: str, hyphens: str = "reversible") -> str:
 
 def ezproxy_url(url: str, base: str, hyphens: str = "reversible") -> str:
     """Rewrite a full URL's host into EZproxy form, preserving path and query."""
+    _, host, _ = requests.validate_url(url)
+    # Validate configuration as an authority, not a URL or substring.
+    if requests.validate_url(f"https://{base}/")[1] != base:
+        raise ValueError("Invalid EZPROXY_BASE")
     parts = urlsplit(url)
-    if not parts.hostname:
-        return url
-    return urlunsplit((
-        parts.scheme or "https",
-        ezproxy_host(parts.hostname, base, hyphens),
-        parts.path,
-        parts.query,
-        parts.fragment,
-    ))
+    proxy_host = (
+        host if requests.in_scope(host, base) else ezproxy_host(host, base, hyphens)
+    )
+    return urlunsplit(
+        (
+            "https",
+            proxy_host,
+            parts.path,
+            parts.query,
+            parts.fragment,
+        )
+    )
 
 
 def _load_cookies(path: str) -> http.cookiejar.MozillaCookieJar:
     jar = http.cookiejar.MozillaCookieJar()
-    jar.load(path, ignore_discard=True, ignore_expires=True)
+    jar.load(path, ignore_discard=True, ignore_expires=False)
     return jar
 
 
 def _resolve_publisher_url(doi: str, session: requests.Session) -> str:
     """Follow doi.org to the publisher landing URL (unproxied) for a DOI."""
     try:
-        r = session.get(f"https://doi.org/{doi}", allow_redirects=True,
-                        timeout=TIMEOUT)
+        r = session.get(f"https://doi.org/{doi}", allow_redirects=True, timeout=TIMEOUT)
         return r.url or f"https://doi.org/{doi}"
     except requests.RequestException:
         return f"https://doi.org/{doi}"
@@ -83,18 +89,14 @@ def _resolve_publisher_url(doi: str, session: requests.Session) -> str:
 
 def _extract_pdf_link(html: str, page_url: str) -> str | None:
     """Best-effort scrape of a PDF link from a publisher landing page."""
-    m = re.search(r'<meta[^>]+name=["\']citation_pdf_url["\'][^>]+content=["\']([^"\']+)',
-                  html, re.I) or re.search(
-        r'href=["\']([^"\']+\.pdf[^"\']*)["\']', html, re.I)
+    m = re.search(
+        r'<meta[^>]+name=["\']citation_pdf_url["\'][^>]+content=["\']([^"\']+)',
+        html,
+        re.I,
+    ) or re.search(r'href=["\']([^"\']+\.pdf[^"\']*)["\']', html, re.I)
     if not m:
         return None
-    href = m.group(1)
-    if href.startswith("http"):
-        return href
-    parts = urlsplit(page_url)
-    if href.startswith("/"):
-        return f"{parts.scheme}://{parts.netloc}{href}"
-    return f"{parts.scheme}://{parts.netloc}/{href}"
+    return urljoin(page_url, m.group(1))
 
 
 def fetch_pdf(doi, title, output_dir=PAPERS_DIR):
@@ -102,40 +104,62 @@ def fetch_pdf(doi, title, output_dir=PAPERS_DIR):
 
     Returns dict with keys: status, doi, title, file_name, error (if failed).
     """
-    from pdf_utils import clean_filename, is_valid_pdf
+    from pdf_utils import clean_filename, is_valid_pdf, write_download
 
     safe_title = title if title else f"Unknown_{doi}"
     file_name = f"{clean_filename(safe_title)}.pdf"
     file_path = os.path.join(output_dir, file_name)
 
     def fail(error):
-        return {"status": "failed", "doi": doi, "title": title,
-                "file_name": file_name, "error": error}
+        return {
+            "status": "failed",
+            "doi": doi,
+            "title": title,
+            "file_name": file_name,
+            "error": error,
+        }
 
     if os.path.exists(file_path):
         if is_valid_pdf(file_path):
-            return {"status": "skipped", "doi": doi, "title": title,
-                    "file_name": file_name}
-        os.remove(file_path)
+            return {
+                "status": "skipped",
+                "doi": doi,
+                "title": title,
+                "file_name": file_name,
+            }
 
-    base = os.environ.get(BASE_ENV, "").strip()
+    base = os.environ.get(BASE_ENV, "").strip().lower().rstrip(".")
     cookies_path = os.environ.get(COOKIES_ENV, "").strip()
     hyphens = os.environ.get(HYPHENS_ENV, "reversible").strip() or "reversible"
     if not base:
         return fail(f"{BASE_ENV} not set (your institution's EZproxy host suffix)")
     if not cookies_path or not os.path.exists(cookies_path):
-        return fail(f"{COOKIES_ENV} not set or missing (export cookies.txt after "
-                    "logging into the proxy)")
+        return fail(
+            f"{COOKIES_ENV} not set or missing (export cookies.txt after "
+            "logging into the proxy)"
+        )
     if not doi:
         return fail("EZproxy resolution requires a DOI")
 
+    session = None
     try:
         session = requests.Session()
         session.headers.update(HEADERS)
-        session.cookies = _load_cookies(cookies_path)  # type: ignore[assignment]
-
+        # Resolve the public DOI without loading or attaching institutional cookies.
         publisher_url = _resolve_publisher_url(doi, session)
+        session.close()
         target = ezproxy_url(publisher_url, base, hyphens)
+        session = requests.Session()
+        session.headers.update(HEADERS)
+        session.cookie_scope = base
+        jar = _load_cookies(cookies_path)
+        for cookie in list(jar):
+            domain = cookie.domain.lstrip(".").lower()
+            if not requests.in_scope(domain, base) or cookie.is_expired():
+                jar.clear(cookie.domain, cookie.path, cookie.name)
+            else:
+                cookie.secure = True
+        session.cookies = jar
         resp = session.get(target, timeout=TIMEOUT, allow_redirects=True)
         if resp.status_code != 200:
             return fail(f"proxy fetch failed: {resp.status_code}")
@@ -147,19 +171,24 @@ def fetch_pdf(doi, title, output_dir=PAPERS_DIR):
             link = _extract_pdf_link(resp.text, resp.url)
             if not link:
                 return fail("no PDF link found on landing page (auth expired?)")
-            link = ezproxy_url(link, base, hyphens) if base not in link else link
+            link = ezproxy_url(link, base, hyphens)
             resp = session.get(link, timeout=TIMEOUT, allow_redirects=True)
+            if resp.status_code != 200:
+                return fail(f"proxy PDF fetch failed: {resp.status_code}")
             content = resp.content
 
-        with open(file_path, "wb") as fh:
-            fh.write(content)
+        write_download(file_path, content)
         if not is_valid_pdf(file_path):
             os.remove(file_path)
-            return fail("downloaded file is not a valid PDF (auth expired or paywalled)")
-        return {"status": "success", "doi": doi, "title": title,
-                "file_name": file_name}
+            return fail(
+                "downloaded file is not a valid PDF (auth expired or paywalled)"
+            )
+        return {"status": "success", "doi": doi, "title": title, "file_name": file_name}
     except Exception as e:
         return fail(str(e))
+    finally:
+        if session is not None:
+            session.close()
 
 
 def main():

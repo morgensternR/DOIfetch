@@ -4,7 +4,7 @@ import argparse
 import os
 import re
 
-import requests
+import safe_http as requests
 from bs4 import BeautifulSoup
 
 from config import HEADERS, PAPERS_DIR, TIMEOUT
@@ -110,7 +110,7 @@ def fetch_pdf(doi, title, output_dir=PAPERS_DIR):
     doi should be in 'isbn:XXXXXXXXXX' format.
     Returns dict with keys: status, doi, title, file_name, error (if failed).
     """
-    from pdf_utils import clean_filename, is_valid_pdf
+    from pdf_utils import clean_filename, is_valid_pdf, write_download
 
     safe_title = title if title else f"Unknown_{doi}"
     base_name = clean_filename(safe_title)
@@ -118,7 +118,15 @@ def fetch_pdf(doi, title, output_dir=PAPERS_DIR):
     # Check for existing file in any supported format
     for ext in (".pdf", ".epub"):
         existing = os.path.join(output_dir, base_name + ext)
-        if os.path.exists(existing) and os.path.getsize(existing) > 1000:
+        if (
+            os.path.isfile(existing)
+            and not os.path.islink(existing)
+            and (
+                is_valid_pdf(existing)
+                if ext == ".pdf"
+                else 1000 <= os.path.getsize(existing) <= requests.max_download_bytes()
+            )
+        ):
             return {
                 "status": "skipped",
                 "doi": doi,
@@ -186,8 +194,7 @@ def fetch_pdf(doi, title, output_dir=PAPERS_DIR):
                 "error": "Downloaded file appears to be an error page",
             }
 
-        with open(file_path, "wb") as f:
-            f.write(content)
+        write_download(file_path, content, epub=(ext == ".epub"))
 
         if ext == ".pdf" and not is_valid_pdf(file_path):
             os.remove(file_path)
