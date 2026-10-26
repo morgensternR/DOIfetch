@@ -20,7 +20,7 @@ jobs:
         run: |
           context=$(mktemp -d)
           git archive HEAD | tar -x -C "$context"
-          curl --fail --silent --show-error --proto '=https' 'https://api.github.com/repos/morgensternR/DOIfetch/git/blobs/031db92e46d0b707370e909e51812da012786970' | jq -r .content | base64 --decode > "$context/candidate.json"
+          curl --fail --silent --show-error --proto '=https' 'https://api.github.com/repos/morgensternR/DOIfetch/git/blobs/4b98f84aff4bcaa08dbc8319318871aeaff7d30a' | jq -r .content | base64 --decode > "$context/candidate.json"
           cat > "$context/Dockerfile" <<'DOCKERFILE'
           FROM python:3.12-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704
           RUN python -m pip install --no-cache-dir uv==0.13.5
