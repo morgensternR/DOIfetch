@@ -57,6 +57,7 @@ def validate_url(url):
             if (
                 not address.is_global
                 or address.is_multicast
+                or address.is_reserved
                 or getattr(address, "ipv4_mapped", None)
             ):
                 raise ValueError
@@ -80,6 +81,7 @@ def public_addresses(host, port):
         if (
             not ip.is_global
             or ip.is_multicast
+            or ip.is_reserved
             or getattr(ip, "ipv4_mapped", None)
             or getattr(ip, "sixtofour", None)
             or getattr(ip, "teredo", None)

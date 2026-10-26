@@ -82,6 +82,8 @@ def test_invalid_destinations_rejected_before_send(monkeypatch, url):
         ["::1"],
         ["93.184.216.34", "192.168.1.1"],
         ["::ffff:93.184.216.34"],
+        ["64:ff9b::a00:1"],
+        ["2002:0a00:0001::1"],
     ],
 )
 def test_dns_rejects_nonpublic_and_mixed_answers(monkeypatch, addresses):
