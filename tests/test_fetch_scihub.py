@@ -1,5 +1,7 @@
 """Tests for the Sci-Hub / SciDB fetcher."""
 
+import pytest
+
 import fetch_scihub
 
 VALID_PDF = b"%PDF-1.6\n" + b"0" * 2000 + b"\n%%EOF\n"
@@ -101,3 +103,82 @@ def test_fetch_pdf_failed_when_no_link(monkeypatch, tmp_path):
     )
     assert result["status"] == "failed"
     assert "PDF link not found" in result["error"]
+
+
+@pytest.mark.parametrize(
+    ("html", "expected"),
+    [
+        (
+            '<iframe src="https://acceptable.a-ads.com/2425588/?size=Adaptive"></iframe>',
+            None,
+        ),
+        (
+            '<iframe src="https://ads.example/banner"></iframe><iframe src="//papers.example/paper.pdf"></iframe>',
+            "https://papers.example/paper.pdf",
+        ),
+        (
+            '<iframe src="https://ads.example/banner"></iframe><embed src="https://papers.example/paper.pdf">',
+            "https://papers.example/paper.pdf",
+        ),
+        (
+            '<iframe></iframe><embed src="https://papers.example/paper.pdf">',
+            "https://papers.example/paper.pdf",
+        ),
+        (
+            '<embed type="application/pdf" src="https://papers.example/download?id=42">',
+            "https://papers.example/download?id=42",
+        ),
+        (
+            '<iframe id="pdf" src="//papers.example/download?id=42"></iframe>',
+            "https://papers.example/download?id=42",
+        ),
+        (
+            '<iframe src="https://papers.example/PAPER.PDF?download=1#page=2"></iframe>',
+            "https://papers.example/PAPER.PDF?download=1#page=2",
+        ),
+        (
+            '<iframe src="https://ads.example/banner?name=paper.pdf#paper.pdf"></iframe>',
+            None,
+        ),
+        ('<iframe id="pdf" src="javascript:alert(1)"></iframe>', None),
+        (
+            '<embed type="application/pdf" src="https://user:password@papers.example/file.pdf">',
+            None,
+        ),
+        ('<iframe src="http://127.0.0.1/paper.pdf"></iframe>', None),
+    ],
+)
+def test_extract_pdf_url_requires_pdf_evidence(html, expected):
+    assert fetch_scihub.extract_pdf_url(html.encode()) == expected
+
+
+@pytest.mark.parametrize("has_pdf", [False, True])
+def test_fetch_pdf_never_requests_unmarked_ad_iframe(monkeypatch, tmp_path, has_pdf):
+    mirror = "https://mirror.example/"
+    pdf_url = "https://papers.example/paper.pdf"
+    html = (
+        b'<iframe src="https://acceptable.a-ads.com/2425588/?size=Adaptive"></iframe>'
+    )
+    if has_pdf:
+        html += f'<embed src="{pdf_url}">'.encode()
+    calls = []
+
+    def fake_get(url, **kwargs):
+        calls.append(url)
+        if url == mirror + "10.1000/example":
+            return _FakeResp(html)
+        if url == pdf_url:
+            return _FakeResp(VALID_PDF)
+        pytest.fail(f"Unexpected request to unrelated iframe: {url}")
+
+    monkeypatch.setattr(fetch_scihub, "SCI_HUB_DOMAINS", [mirror])
+    monkeypatch.setattr(fetch_scihub, "SCIDB_DOMAINS", [])
+    monkeypatch.setattr(fetch_scihub.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(fetch_scihub.requests, "get", fake_get)
+    result = fetch_scihub.fetch_pdf("10.1000/example", "Paper", str(tmp_path))
+    assert calls == [mirror + "10.1000/example"] + ([pdf_url] if has_pdf else [])
+    assert result["status"] == ("success" if has_pdf else "failed")
+    if has_pdf:
+        assert (tmp_path / result["file_name"]).read_bytes() == VALID_PDF
+    else:
+        assert not list(tmp_path.iterdir())

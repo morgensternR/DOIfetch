@@ -4,7 +4,7 @@ import argparse
 import os
 import random
 import time
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import safe_http as requests
 from bs4 import BeautifulSoup
@@ -36,17 +36,24 @@ def build_query_urls(doi, title):
 
 
 def extract_pdf_url(content):
-    """Return the embedded PDF URL from a Sci-Hub/SciDB viewer page, or None."""
+    """Return an explicitly marked PDF embed, skipping unrelated frames."""
     soup = BeautifulSoup(content, "html.parser")
-    node = soup.find("iframe") or soup.find("embed")
-    if not node:
-        return None
-    src = node.get("src")
-    if not src:
-        return None
-    if src.startswith("//"):  # protocol-relative src, common on Sci-Hub
-        src = "https:" + src
-    return src if src.startswith("http") else None
+    for node in soup.find_all(["iframe", "embed"]):
+        src = node.get("src", "")
+        if src.startswith("//"):  # protocol-relative src, common on Sci-Hub
+            src = "https:" + src
+        try:
+            requests.validate_url(src)
+        except requests.RequestException:
+            continue
+        # Extensionless viewer URLs need an explicit PDF marker.
+        if (
+            node.get("id", "").lower() == "pdf"
+            or node.get("type", "").strip().lower() == "application/pdf"
+            or urlsplit(src).path.lower().endswith(".pdf")
+        ):
+            return src
+    return None
 
 
 def fetch_pdf(doi, title, output_dir=PAPERS_DIR):
