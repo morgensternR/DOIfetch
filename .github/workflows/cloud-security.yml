@@ -61,7 +61,7 @@ jobs:
             docker cp "$container:/work/$path" "$path"
           done
           docker rm "$container"
-          git diff --check
+          git -c core.whitespace=cr-at-eol diff --check
           git add -- fetch_crossref.py fetch_ezproxy.py fetch_hal.py fetch_istex.py fetch_libgen.py fetch_scihub.py fetch_unpaywall.py fetch_url.py safe_http.py pdf_utils.py tests/test_fetch_ezproxy.py tests/test_fetch_scihub.py tests/test_fetch_istex.py pyproject.toml tests/conftest.py tests/test_security.py tests/cloud_open_access.py tests/test_network.py uv.lock
           git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m "security: constrain network destinations and safely publish bounded downloads"
           gh auth setup-git
