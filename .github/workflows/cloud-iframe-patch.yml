@@ -1,0 +1,63 @@
+name: Prepare focused iframe patch
+on:
+  push:
+    branches: [security/cloud-hardening]
+    paths: [.github/workflows/cloud-iframe-patch.yml]
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Build disposable regression image
+        run: |
+          context=$(mktemp -d)
+          git archive HEAD | tar -x -C "$context"
+          curl --fail --silent --show-error https://api.github.com/repos/morgensternR/DOIfetch/git/blobs/98c72c166ec1caf0816514576cf7b0e811f7df5e | jq -r .content | base64 --decode > "$context/candidates.json"
+          cat > "$context/Dockerfile" <<'DOCKERFILE'
+          FROM python:3.12-slim
+          RUN python -m pip install --no-cache-dir uv==0.13.5
+          WORKDIR /work
+          COPY . .
+          ENV HOME=/tmp/empty-home PYTHONPATH=/work UV_CACHE_DIR=/opt/uv-cache
+          RUN mkdir -p /tmp/empty-home
+          RUN uv run --no-project python -c "import json,pathlib; p='tests/test_fetch_scihub.py'; pathlib.Path(p).write_bytes(json.load(open('candidates.json'))[p].encode())"
+          RUN uv run --locked --with ruff python -c "pass"
+          DOCKERFILE
+          docker build --tag doifetch-iframe "$context"
+      - name: Reproduce regression, apply fix, format and verify offline
+        run: |
+          docker create --name iframe-patch --network none --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 --memory 2g doifetch-iframe sh -ec '
+            set +e
+            uv run --offline --frozen pytest -q tests/test_fetch_scihub.py > /tmp/red.txt 2>&1
+            red=$?
+            set -e
+            cat /tmp/red.txt
+            test "$red" -eq 1
+            uv run --offline --frozen python -c "import json,pathlib; p=\"fetch_scihub.py\"; pathlib.Path(p).write_bytes(json.load(open(\"candidates.json\"))[p].encode())"
+            uv run --offline --frozen --with ruff ruff format fetch_scihub.py tests/test_fetch_scihub.py
+            uv run --offline --frozen --with ruff ruff check --select E4,E7,E9,F fetch_scihub.py tests/test_fetch_scihub.py
+            uv run --offline --frozen pytest -q tests/test_fetch_scihub.py
+            uv run --offline --frozen pytest -q -m "not network" --ignore=tests/test_network.py
+          '
+          docker start --attach iframe-patch
+          test "$(docker inspect --format '{{.State.ExitCode}}' iframe-patch)" -eq 0
+          docker cp iframe-patch:/work/fetch_scihub.py fetch_scihub.py
+          docker cp iframe-patch:/work/tests/test_fetch_scihub.py tests/test_fetch_scihub.py
+          docker rm iframe-patch
+          git -c core.whitespace=cr-at-eol diff --check
+      - name: Commit cloud-verified patch and remove temporary workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add fetch_scihub.py tests/test_fetch_scihub.py
+          git rm .github/workflows/cloud-iframe-patch.yml
+          git commit -m "fix: skip unrelated iframe URLs when selecting embedded PDFs"
+          gh auth setup-git
+          git push origin HEAD:security/cloud-hardening
