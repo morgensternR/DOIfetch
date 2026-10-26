@@ -1,5 +1,17 @@
 # Final cloud verification
 
+## Embedded PDF selection follow-up — 2026-10-26
+
+A focused follow-up at `9b3063c688796cdc24aa6cebd5610af6422a4bdb` addresses the advertising-iframe finding below. `fetch_scihub.extract_pdf_url()` now scans iframe/embed candidates and requires a URL path ending in `.pdf`, `type="application/pdf"`, or the existing `id="pdf"` viewer marker. It skips unrelated frames and applies the existing URL validator before selection. Protocol-relative URLs, query strings, and explicitly marked extensionless viewers remain supported. Unmarked extensionless frames are intentionally no longer treated as PDF links.
+
+The only runtime change is in `fetch_scihub.py`; `tests/test_fetch_scihub.py` adds 13 offline regression cases. [Cloud regression run](https://github.com/morgensternR/DOIfetch/actions/runs/40408415618): the added tests exposed 9 failures before the fix, followed by **22 focused tests passed** and **135 offline tests passed** after it. Ruff formatting and focused lint passed before the patch commit. Mocked requests verify that the observed advertising iframe is never contacted, both alone and before a legitimate PDF embed. No live downloads were repeated.
+
+No sources were removed. Shared HTTP/TLS, redirects, cookies, size limits, temporary-file handling, dependencies, and memory behavior are unchanged. PDF labels and filename suffixes remain heuristics supplied by untrusted pages; they do not prove document identity or safety and do not block every possible unrelated public URL.
+
+The report below is historical evidence for the preceding verification commit. Its original advertising-iframe finding is superseded by this focused patch; the memory and other limitations still apply.
+
+## Original verification record
+
 Date: 2026-10-26 UTC. Branch: `security/cloud-hardening`.
 Starting commit: `7eae2f1a7445ec43dacb2ffc467fce8b70a3a955`.
 Verified implementation and workflow: `e6c7c30c0fc5e26b8478ee13145521304cbf8858`.
