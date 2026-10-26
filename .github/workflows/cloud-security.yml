@@ -1,0 +1,44 @@
+name: Cloud security verification
+on:
+  push:
+    branches: [security/cloud-hardening]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Build disposable test image without credentials or host mounts
+        shell: bash
+        run: |
+          context=$(mktemp -d)
+          git archive HEAD | tar -x -C "$context"
+          cat > "$context/Dockerfile" <<'DOCKERFILE'
+          FROM python:3.12-slim
+          RUN python -m pip install --no-cache-dir uv
+          WORKDIR /work
+          COPY . .
+          ENV HOME=/tmp/empty-home
+          RUN mkdir -p /tmp/empty-home
+          RUN uv run --frozen python -c "pass"
+          RUN uv run --frozen --with ruff --with pip-audit python -c "pass"
+          DOCKERFILE
+          docker build --tag doifetch-security "$context"
+      - name: Existing offline tests (network disabled)
+        run: >
+          docker run --rm --network none --cap-drop ALL
+          --security-opt no-new-privileges --pids-limit 128 --memory 2g
+          doifetch-security
+          uv run --offline --frozen pytest -q -m "not network" --ignore=tests/test_network.py
+      - name: Audit locked dependencies
+        if: always()
+        run: |
+          docker run --rm --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 --memory 2g doifetch-security sh -ec '
+            uv export --frozen --format requirements-txt --no-hashes > /tmp/requirements.txt
+            uv run --offline --frozen --with ruff --with pip-audit pip-audit --no-deps --disable-pip -r /tmp/requirements.txt
+          '
