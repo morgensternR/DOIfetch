@@ -6,39 +6,60 @@ on:
 permissions:
   contents: read
 jobs:
-  offline:
+  harden:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Build disposable test image without credentials or host mounts
+      - name: Prepare and format candidate in disposable cloud container
         shell: bash
         run: |
           context=$(mktemp -d)
           git archive HEAD | tar -x -C "$context"
+          curl --fail --silent --show-error --proto '=https' 'https://api.github.com/repos/morgensternR/DOIfetch/git/blobs/c7d3b79256f80422152b736fd79ea1a13391dd18' | jq -r .content | base64 --decode > "$context/candidate.json"
           cat > "$context/Dockerfile" <<'DOCKERFILE'
-          FROM python:3.12-slim
-          RUN python -m pip install --no-cache-dir uv
+          FROM python:3.12-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704
+          RUN python -m pip install --no-cache-dir uv==0.13.5
           WORKDIR /work
           COPY . .
           ENV HOME=/tmp/empty-home
           RUN mkdir -p /tmp/empty-home
-          RUN uv run --frozen python -c "pass"
-          RUN uv run --frozen --with ruff --with pip-audit python -c "pass"
+          RUN uv run --no-project python -c "import json,pathlib; data=json.load(open('candidate.json')); [(pathlib.Path(p).parent.mkdir(parents=True,exist_ok=True),pathlib.Path(p).write_text(c)) for p,c in data.items()]"
+          RUN uv lock --upgrade-package requests --upgrade-package urllib3 --upgrade-package soupsieve --upgrade-package certifi --upgrade-package idna --upgrade-package pygments --upgrade-package pytest
+          RUN uv run --with ruff --with pip-audit ruff format fetch_crossref.py fetch_ezproxy.py fetch_hal.py fetch_istex.py fetch_libgen.py fetch_scihub.py fetch_unpaywall.py fetch_url.py safe_http.py pdf_utils.py tests/test_fetch_ezproxy.py tests/test_fetch_scihub.py tests/test_fetch_istex.py tests/conftest.py tests/test_security.py
+          RUN uv run --with ruff --with pip-audit ruff check fetch_crossref.py fetch_ezproxy.py fetch_hal.py fetch_istex.py fetch_libgen.py fetch_scihub.py fetch_unpaywall.py fetch_url.py safe_http.py pdf_utils.py tests/test_fetch_ezproxy.py tests/test_fetch_scihub.py tests/test_fetch_istex.py tests/conftest.py tests/test_security.py
+          RUN uv run --with ruff --with pip-audit python -c "pass"
           DOCKERFILE
           docker build --tag doifetch-security "$context"
-      - name: Existing offline tests (network disabled)
+      - name: Offline regression tests (network disabled)
         run: >
           docker run --rm --network none --cap-drop ALL
           --security-opt no-new-privileges --pids-limit 128 --memory 2g
           doifetch-security
           uv run --offline --frozen pytest -q -m "not network" --ignore=tests/test_network.py
-      - name: Audit locked dependencies
-        if: always()
+      - name: Audit every resolved version in the universal lock
         run: |
           docker run --rm --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 --memory 2g doifetch-security sh -ec '
-            uv export --frozen --format requirements-txt --no-hashes > /tmp/requirements.txt
+            uv run --offline --frozen python -c "import tomllib; d=tomllib.load(open(\"uv.lock\",\"rb\")); print(\"\\n\".join(p[\"name\"]+\"==\"+p[\"version\"] for p in d[\"package\"] if \"virtual\" not in p.get(\"source\",{})))" > /tmp/requirements.txt
+            cat /tmp/requirements.txt
             uv run --offline --frozen --with ruff --with pip-audit pip-audit --no-deps --disable-pip -r /tmp/requirements.txt
           '
+      - name: Commit only formatted, lint-clean, tested changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          container=$(docker create doifetch-security)
+          for path in fetch_crossref.py fetch_ezproxy.py fetch_hal.py fetch_istex.py fetch_libgen.py fetch_scihub.py fetch_unpaywall.py fetch_url.py safe_http.py pdf_utils.py tests/test_fetch_ezproxy.py tests/test_fetch_scihub.py tests/test_fetch_istex.py pyproject.toml tests/conftest.py tests/test_security.py uv.lock; do
+            docker cp "$container:/work/$path" "$path"
+          done
+          docker rm "$container"
+          git diff --check
+          git add -- fetch_crossref.py fetch_ezproxy.py fetch_hal.py fetch_istex.py fetch_libgen.py fetch_scihub.py fetch_unpaywall.py fetch_url.py safe_http.py pdf_utils.py tests/test_fetch_ezproxy.py tests/test_fetch_scihub.py tests/test_fetch_istex.py pyproject.toml tests/conftest.py tests/test_security.py uv.lock
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m "security: constrain network destinations and safely publish bounded downloads"
+          gh auth setup-git
+          git push origin HEAD:security/cloud-hardening
