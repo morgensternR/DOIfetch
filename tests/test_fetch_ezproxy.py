@@ -1,5 +1,7 @@
 """Tests for the EZproxy institutional fetcher."""
 
+from urllib.parse import urlsplit
+
 import fetch_ezproxy
 
 VALID_PDF = b"%PDF-1.6\n" + b"0" * 2000 + b"\n%%EOF\n"
@@ -69,7 +71,7 @@ def test_success_writes_pdf(monkeypatch, tmp_path):
             pass
 
         def get(self, url, **kwargs):
-            if "doi.org" in url:
+            if urlsplit(url).hostname == "doi.org":
                 return _Resp("https://www.nature.com/articles/x", b"", "text/html")
             return _Resp(url, VALID_PDF)
 

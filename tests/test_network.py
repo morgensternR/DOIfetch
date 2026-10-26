@@ -5,7 +5,8 @@ Skip with: uv run --group dev pytest -m 'not network'
 """
 
 import pytest
-import requests
+import safe_http as requests
+from pdf_utils import write_download
 
 from config import UNPAYWALL_EMAIL
 from conftest import SAMPLE_DOIS
@@ -49,10 +50,10 @@ class TestCrossref:
         pdf_url = get_pdf_url(OA_DOI)
         if not pdf_url:
             pytest.skip("Crossref has no PDF link for this DOI")
-        resp = requests.get(pdf_url, timeout=60, verify=False)
+        resp = requests.get(pdf_url, timeout=60, verify=True)
         assert resp.status_code == 200
         pdf_path = tmp_path / "paper.pdf"
-        pdf_path.write_bytes(resp.content)
+        write_download(pdf_path, resp.content)
         assert pdf_path.stat().st_size > 1000, (
             "Downloaded file too small to be a real PDF"
         )
@@ -79,7 +80,7 @@ class TestUnpaywall:
         resp = requests.get(pdf_url, timeout=60)
         assert resp.status_code == 200
         pdf_path = tmp_path / "paper.pdf"
-        pdf_path.write_bytes(resp.content)
+        write_download(pdf_path, resp.content)
         assert pdf_path.stat().st_size > 1000, (
             "Downloaded file too small to be a real PDF"
         )
