@@ -62,6 +62,48 @@ jobs:
             uv run --offline --frozen --with ruff --with pip-audit pip-audit --no-deps --disable-pip -r /tmp/primary.txt
             uv run --offline --frozen --with ruff --with pip-audit pip-audit --no-deps --disable-pip -r /tmp/alternatives.txt
           '
+  windows-offline:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+        python: ["3.12"]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Prepare disposable runner dependencies
+        shell: pwsh
+        run: |
+          python -m pip install uv==0.13.5
+          uv run --locked python -c "pass"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: All offline tests with isolated home and blocked Python egress
+        shell: pwsh
+        run: |
+          $testHome = Join-Path $env:RUNNER_TEMP "doifetch-empty-home"
+          New-Item -ItemType Directory -Force $testHome | Out-Null
+          $env:HOME = $testHome
+          $env:USERPROFILE = $testHome
+          "EZPROXY_BASE","EZPROXY_COOKIES","ISTEX_ACCESSTOKEN","ZOTERO_DB_PATH","ZOTERO_DATA_DIR" | ForEach-Object { Remove-Item "Env:$_" -ErrorAction SilentlyContinue }
+          $pythonPath = (uv run --offline --frozen python -c "import sys; print(sys.executable)").Trim()
+          New-NetFirewallRule -DisplayName "DOIfetch offline Python" -Direction Outbound -Program $pythonPath -Action Block | Out-Null
+          try {
+            uv run --offline --frozen pytest -q -m "not network" --ignore=tests/test_network.py --junitxml=windows-results.xml
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          } finally {
+            Remove-NetFirewallRule -DisplayName "DOIfetch offline Python"
+          }
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        if: always()
+        with:
+          name: windows-results-${{ matrix.os }}-py${{ matrix.python }}
+          path: windows-results.xml
   codeql:
     permissions:
       contents: read
