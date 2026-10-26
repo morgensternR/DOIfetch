@@ -46,7 +46,10 @@ jobs:
           docker run --rm --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 --memory 2g doifetch-security sh -ec '
             uv run --offline --frozen python -c "import tomllib; d=tomllib.load(open(\"uv.lock\",\"rb\")); print(\"\\n\".join(p[\"name\"]+\"==\"+p[\"version\"] for p in d[\"package\"] if \"virtual\" not in p.get(\"source\",{})))" > /tmp/requirements.txt
             cat /tmp/requirements.txt
-            uv run --offline --frozen --with ruff --with pip-audit pip-audit --no-deps --disable-pip -r /tmp/requirements.txt
+            awk -F== "!seen[\$1]++" /tmp/requirements.txt > /tmp/primary.txt
+            awk -F== "seen[\$1]++" /tmp/requirements.txt > /tmp/alternatives.txt
+            uv run --offline --frozen --with ruff --with pip-audit pip-audit --no-deps --disable-pip -r /tmp/primary.txt
+            uv run --offline --frozen --with ruff --with pip-audit pip-audit --no-deps --disable-pip -r /tmp/alternatives.txt
           '
       - name: Commit only formatted, lint-clean, tested changes
         env:
