@@ -413,3 +413,32 @@ def test_source_failure_leaves_no_file(monkeypatch, tmp_path):
         == "failed"
     )
     assert not list(tmp_path.iterdir())
+
+
+def test_identity_in_bounded_flate_stream():
+    import zlib
+    from cloud_open_access import contains_doi
+
+    doi = "10.1371/journal.pone.0000001"
+    compressed = zlib.compress(b"(10.1371) Tj (/journal.pone.0000001) Tj")
+    content = b"<< /Filter /FlateDecode >>\nstream\n" + compressed + b"\nendstream"
+    assert contains_doi(content, doi)
+    assert not contains_doi(content, "10.9999/absent")
+
+
+def test_identity_check_bounds_decompression():
+    import zlib
+    from cloud_open_access import contains_doi
+
+    doi = "10.1371/journal.pone.0000001"
+    compressed = zlib.compress(b"x" * 10000 + doi.encode())
+    content = b"<< /Filter /FlateDecode >>\nstream\n" + compressed + b"\nendstream"
+    assert not contains_doi(content, doi, budget=100)
+
+
+def test_identity_check_handles_invalid_compression():
+    from cloud_open_access import contains_doi
+
+    assert not contains_doi(
+        b"<< /Filter /FlateDecode >>\nstream\nnot zlib\nendstream", "10.1/test"
+    )
