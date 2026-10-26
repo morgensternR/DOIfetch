@@ -1,0 +1,53 @@
+name: Prepare cloud verification helpers
+on:
+  push:
+    branches: [security/cloud-hardening]
+    paths: [.github/workflows/cloud-prepare.yml]
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Format and validate candidates inside disposable cloud container
+        run: |
+          context=$(mktemp -d)
+          git archive HEAD | tar -x -C "$context"
+          curl --fail --silent --show-error https://api.github.com/repos/morgensternR/DOIfetch/git/blobs/d51b4c75dd6cfd51a07ef33888a15ce318180cc8 | jq -r .content | base64 --decode > "$context/candidates.json"
+          cat > "$context/Dockerfile" <<'DOCKERFILE'
+          FROM python:3.12-slim
+          RUN python -m pip install --no-cache-dir uv==0.13.5
+          WORKDIR /work
+          COPY . .
+          ENV HOME=/tmp/empty-home PYTHONPATH=/work UV_CACHE_DIR=/opt/uv-cache
+          RUN mkdir -p /tmp/empty-home
+          RUN uv run --no-project python -c "import json,pathlib; [pathlib.Path(p).write_text(s) for p,s in json.load(open('candidates.json')).items()]"
+          RUN uv run --locked --with ruff ruff format tests/cloud_final_verification.py tests/cloud_memory.py
+          RUN uv run --frozen --with ruff ruff check --select E4,E7,E9,F tests/cloud_final_verification.py tests/cloud_memory.py
+          DOCKERFILE
+          docker build --tag doifetch-prepare "$context"
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges --memory 4g --pids-limit 256 doifetch-prepare uv run --offline --frozen python tests/cloud_memory.py | tee memory-preflight.json
+          container=$(docker create doifetch-prepare)
+          docker cp "$container:/work/tests/cloud_final_verification.py" tests/cloud_final_verification.py
+          docker cp "$container:/work/tests/cloud_memory.py" tests/cloud_memory.py
+          docker rm "$container"
+          git -c core.whitespace=cr-at-eol diff --check
+      - name: Commit only cloud-formatted helpers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/cloud_final_verification.py tests/cloud_memory.py
+          git commit -m "test: add isolated source-chain and response-memory verification helpers"
+          gh auth setup-git
+          git push origin HEAD:security/cloud-hardening
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        if: always()
+        with:
+          name: memory-preflight
+          path: memory-preflight.json
