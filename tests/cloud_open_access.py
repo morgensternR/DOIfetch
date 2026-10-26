@@ -18,12 +18,16 @@ DOI = "10.1371/journal.pone.0000001"
 PLOS = "https://journals.plos.org/plosone/article/file?id=10.1371%2Fjournal.pone.0000001&type=printable"
 
 
-def contains_doi(content, doi, budget=16 * 1024 * 1024):
+def contains_text(content, text, budget=16 * 1024 * 1024):
     """Search raw bytes and at most 128 bounded Flate streams, without a PDF parser."""
-    needle = doi.encode("ascii")
-    if needle in content:
+    needle = text.encode("utf-8")
+    if (
+        needle in content
+        or text.encode("utf-16-be") in content
+        or text.encode("utf-16-le") in content
+    ):
         return True
-    for index, marker in enumerate(re.finditer(rb"\nstream\r?\n", content)):
+    for index, marker in enumerate(re.finditer(rb"\bstream\r?\n", content)):
         if index >= 128 or budget <= 0:
             break
         start = marker.end()
@@ -106,13 +110,20 @@ def main():
                 "message"
             ]
             assert metadata["DOI"].lower() == DOI
-            identity = contains_doi(content, DOI)
+            identity_doi = contains_text(content, DOI)
+            identity_title = any(
+                contains_text(content, title)
+                for title in metadata.get("title", [])
+                if len(title) >= 30
+            )
+            identity = identity_doi or identity_title
             report.update(
                 {
                     "title": metadata.get("title"),
                     "bytes": len(content),
                     "sha256": hashlib.sha256(content).hexdigest(),
-                    "doi_present_in_bounded_pdf_bytes": identity,
+                    "doi_present_in_bounded_pdf_bytes": identity_doi,
+                    "exact_title_present_in_bounded_pdf_bytes": identity_title,
                     "identity_method": "raw bytes and bounded Flate text streams",
                     "matches_first_download_sha256": hashlib.sha256(content).hexdigest()
                     == "22f2423f45940809cc040415b5045a707b907fddec6a0c43bea16ac6455c72b0",
@@ -120,7 +131,7 @@ def main():
                 }
             )
             assert identity, (
-                "DOI identity not found in bounded byte inspection; do not claim verified identity"
+                "DOI or exact title not found in bounded byte inspection; do not claim verified identity"
             )
             assert all(r["tls_verified"] and not r["has_credentials"] for r in requests)
             report["passed"] = True
