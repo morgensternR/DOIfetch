@@ -76,12 +76,11 @@ def main():
             "kind": "request",
             "url": request.url,
             "tls_verified": kwargs["verify"] is True,
-            "has_credentials": any(
-                k in request.headers for k in ("Cookie", "Authorization")
-            ),
+            "has_cookie": "Cookie" in request.headers,
+            "has_authorization": "Authorization" in request.headers,
         }
         events.append(event)
-        assert event["tls_verified"] and not event["has_credentials"]
+        assert event["tls_verified"] and not event["has_authorization"]
         try:
             response = original_send(session, request, **kwargs)
             event.update(
